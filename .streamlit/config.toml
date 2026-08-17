@@ -1,0 +1,5 @@
+[server]
+# Avoid Streamlit's default "watchdog" file watcher walking every loaded
+# module's __path__ (harmless but noisy tracebacks when unrelated large
+# libraries like `transformers`/`torch` happen to be installed globally).
+fileWatcherType = "poll"

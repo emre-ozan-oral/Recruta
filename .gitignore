@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+.pytest_cache/
+.streamlit/secrets.toml
+*.egg-info/
+.DS_Store
+
+# Personal data: your CV, past applications, and analysis history — never
+# commit this to a shared/open-source repo.
+recruta.db
+recruta.db-journal
+recruta.db-wal
+recruta.db-shm

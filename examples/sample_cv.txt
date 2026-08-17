@@ -1,0 +1,26 @@
+Ada Yilmaz
+Backend Software Engineer
+
+Experience
+----------
+Backend Engineer, Nova Fintech (2022–present)
+- Built and maintained REST APIs in Python (FastAPI) serving ~2M requests/day.
+- Migrated a monolith's payments module into a separate service; reduced p95 latency by 35%.
+- Wrote integration tests with pytest, set up CI with GitHub Actions.
+- Mentored 2 junior engineers.
+
+Software Engineer, Datalab (2019–2022)
+- Developed data pipelines in Python (Airflow) processing ~50GB/day of event data.
+- Worked with PostgreSQL and Redis; designed schemas for a reporting service.
+- Introduced structured logging and basic observability (Prometheus/Grafana).
+
+Skills
+------
+Python, FastAPI, PostgreSQL, Redis, Docker, GitHub Actions, pytest, basic AWS (EC2, S3, RDS).
+Some exposure to Kubernetes (deployed via existing Helm charts, didn't author them).
+No formal production experience with LLM/agent frameworks, but completed a personal
+project using LangGraph to build a multi-agent CV/job-matching tool.
+
+Education
+---------
+B.Sc. Computer Engineering, Istanbul Technical University (2019)

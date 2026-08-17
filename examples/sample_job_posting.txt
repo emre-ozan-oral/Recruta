@@ -1,0 +1,30 @@
+Senior Backend Engineer — AI Platform Team
+
+About us:
+We're a mid-size fintech building an internal platform for AI-assisted
+customer support. Our backend team owns the APIs, data pipelines, and
+service infrastructure that power both customer-facing products and
+internal ML/LLM tooling.
+
+What you'll do:
+- Design and own backend services (Python) that expose data to LLM-based
+  agents and traditional product features.
+- Improve reliability and observability of high-throughput services.
+- Collaborate closely with the ML team on productionizing agent pipelines
+  (LangGraph or similar orchestration frameworks a plus).
+- Mentor mid-level engineers and participate in architecture reviews.
+
+Requirements:
+- 4+ years of backend engineering experience, strong Python.
+- Experience designing and scaling REST APIs in production.
+- Solid understanding of relational databases (PostgreSQL preferred).
+- Experience with containerization (Docker) and CI/CD.
+- Strong communication skills; comfortable mentoring.
+
+Nice to have:
+- Experience with Kubernetes in production.
+- Exposure to LLM/agent orchestration frameworks (LangGraph, LangChain, etc.).
+- Experience with observability stacks (Prometheus/Grafana or similar).
+
+Seniority: Senior
+Location: Remote (Europe timezones)

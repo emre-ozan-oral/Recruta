@@ -1,0 +1,16 @@
+langgraph>=0.2.60
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-groq>=0.2.1
+pydantic>=2.7.0
+python-dotenv>=1.0.1
+streamlit>=1.38.0
+pytest>=8.0.0
+
+# File uploads (CV / job posting as PDF, Word, or screenshot)
+pypdf>=4.0.0
+python-docx>=1.1.0
+Pillow>=10.0.0
+
+# Observability (optional — app works fine with no Langfuse keys set)
+langfuse>=2.50.0

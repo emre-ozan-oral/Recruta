@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 import db
 import ui_helpers
-from file_parsing import UnsupportedFileType, extract_text
+from file_parsing import ExtractionResult, UnsupportedFileType, extract_text_ex
 from graph import build_graph
 from langfuse_utils import get_langfuse_handler
 
@@ -39,13 +39,26 @@ if not os.getenv("GROQ_API_KEY"):
 UPLOAD_TYPES = ["pdf", "docx", "png", "jpg", "jpeg", "webp", "txt", "md"]
 
 
+@st.cache_data(show_spinner="Reading file…", max_entries=16)
+def _extract_cached(file_bytes: bytes, filename: str) -> ExtractionResult:
+    """Streamlit reruns the whole script on every widget interaction, so an
+    uncached extraction would re-run (and, for scans/screenshots, re-bill
+    and re-rate-limit) an OCR call on every keystroke elsewhere on the page.
+    Only successful results are cached; errors re-raise each run."""
+    return extract_text_ex(file_bytes, filename)
+
+
 def _handle_upload(uploaded_file):
-    """Extract text from a Streamlit UploadedFile, surfacing errors inline."""
+    """Extract text from a Streamlit UploadedFile. Repairs/approximations are
+    shown as warnings; only truly unrecoverable files show an error."""
     try:
-        return extract_text(uploaded_file.getvalue(), uploaded_file.name)
+        result = _extract_cached(uploaded_file.getvalue(), uploaded_file.name)
     except (UnsupportedFileType, ValueError) as exc:
         st.error(str(exc))
         return None
+    for note in result.notes:
+        st.warning(note, icon="⚠️")
+    return result.text
 
 
 def _history_label(app_record: dict) -> str:
@@ -212,6 +225,8 @@ else:
 
 
 # --- Main area ---------------------------------------------------------------
+
+ui_helpers.show_flag_notice()
 
 tab_analyze, tab_history = st.tabs(["Analyze", "History"])
 

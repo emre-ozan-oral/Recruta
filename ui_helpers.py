@@ -105,17 +105,39 @@ def render_missing_skills_with_flagging(
                 key=f"{key_prefix}_flag_{i}",
                 help="Flag this as a skill you actually have but didn't write in your CV.",
             ):
-                with st.spinner("Checking…"):
-                    verdict = skill_verifier.evaluate_skill(skill, job_context)
+                try:
+                    with st.spinner("Checking…"):
+                        verdict = skill_verifier.evaluate_skill(
+                            skill, job_context, trust_input=True
+                        )
+                except Exception as exc:  # noqa: BLE001 — rate limit, network, bad JSON
+                    st.error(f"Couldn't check this skill right now ({exc}). Please try again.")
+                    st.stop()
                 if verdict.is_plausible:
                     db.add_user_skill(verdict.normalized_skill, note=verdict.note)
-                    st.success(
+                    notice = (
+                        "success",
                         f"Added '{verdict.normalized_skill}' to your skills profile — "
                         "future analyses will consider it automatically."
+                        + (f" ({verdict.note})" if verdict.note else ""),
                     )
                 else:
-                    st.warning(verdict.note or "Couldn't confirm this as a specific skill.")
+                    notice = (
+                        "warning",
+                        verdict.note or "Couldn't confirm this as a specific skill.",
+                    )
+                # st.rerun() below would wipe anything rendered now, so stash
+                # the message; app.py shows it (as a toast) on the next run.
+                st.session_state["flag_notice"] = notice
                 st.rerun()
+
+
+def show_flag_notice() -> None:
+    """Display (once) the result of the last skill-flagging click."""
+    notice = st.session_state.pop("flag_notice", None)
+    if notice:
+        kind, message = notice
+        st.toast(message, icon="✅" if kind == "success" else "⚠️")
 
 
 def render_match_analysis(match_analysis: dict, *, key_prefix: str = "match", job_context: str = "") -> None:

@@ -21,10 +21,14 @@ pipeline run.
 from __future__ import annotations
 
 import os
-from typing import Literal
+import re
+import time
+from functools import lru_cache
+from typing import Any, Literal
 
 from dotenv import load_dotenv
-from langchain_core.runnables import Runnable
+import groq
+from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_groq import ChatGroq
 from pydantic import BaseModel
 
@@ -77,6 +81,15 @@ REASONING_MODEL_CHAIN = [
     os.getenv("GROQ_REASONING_MODEL", "openai/gpt-oss-120b"),
     os.getenv("GROQ_REASONING_MODEL_FALLBACK", "openai/gpt-oss-20b"),
 ]
+
+# Reasoning depth for the scorer. Measured on the same scoring request
+# (probe_scorer.py, gpt-oss-120b): low 1.7 s / ~630 output tokens, medium
+# 2.5 s / ~1,130, high 4.7 s / ~2,100 — with overall scores of 100/94, 93 and
+# 94 (one sample each, so re-check score stability with bench.py before
+# trusting "low"). Reasoning tokens count against Groq's tokens-per-minute
+# limit, so "medium" roughly halves the scorer's cost and latency versus
+# "high" for no visible quality difference. Override: GROQ_REASONING_EFFORT.
+REASONING_EFFORT = os.getenv("GROQ_REASONING_EFFORT", "medium")
 
 # Kept for anything that just wants "the" default model (e.g. file_parsing's
 # vision calls override this explicitly anyway).
@@ -165,14 +178,114 @@ def get_structured_llm(
         "reasoning": REASONING_MODEL_CHAIN,
     }[tier]
     api_key = _require_api_key()
-    extra_kwargs = {"reasoning_effort": "high"} if tier == "reasoning" else {}
+
+    # Rate-limit patience (seconds): how long to wait out a 429 on the SAME
+    # model before giving up on it. Groq rate limits are per model, so for
+    # content/fast tiers the better move on a 429 is to fall through to the
+    # other model immediately (patience 0). The reasoning tier's fallback
+    # (gpt-oss-20b) has been observed failing strict-JSON validation, so
+    # there waiting for the good model beats falling back.
+    patience = float(os.getenv("GROQ_RATE_LIMIT_PATIENCE_REASONING" if tier == "reasoning"
+                               else "GROQ_RATE_LIMIT_PATIENCE",
+                               "20" if tier == "reasoning" else "0"))
+
+    return _build_chain(
+        schema, tier, temperature, api_key, tuple(model_chain), REASONING_EFFORT, patience
+    )
+
+
+@lru_cache(maxsize=64)
+def _build_chain(
+    schema: type[BaseModel],
+    tier: str,
+    temperature: float,
+    api_key: str,
+    model_chain: tuple[str, ...],
+    reasoning_effort: str,
+    patience: float,
+) -> Runnable:
+    """Build (once per distinct configuration) the retry + fallback chain.
+
+    Cached on purpose: constructing two ChatGroq clients + structured-output
+    wrappers costs ~0.3 s on Linux and, measured on the user's Windows
+    machine, roughly 1-1.7 s per pipeline stage (the gap between one node
+    finishing and the next LLM call starting). Reusing the chain also reuses
+    the underlying HTTP connection pool, so later calls skip the TLS
+    handshake. Everything that changes behaviour (schema, tier, temperature,
+    key, model ids, effort, patience) is part of the cache key, so changing
+    an env var / setting yields a fresh chain, never a stale one.
+    """
+    # Reasoning parameters (scorer only) — settled by measurement, not guesswork
+    # (probe_scorer.py, 2026-09-21, same request under every variant):
+    #   * gpt-oss-120b: OK at low / medium / high.
+    #   * gpt-oss-20b : OK at low / medium; effort="high" ALWAYS fails with
+    #     `400 json_validate_failed` (empty failed_generation, ~2.5 s, 0 output
+    #     tokens) — for every parameter shape tried. That, not reasoning_format,
+    #     was the recurring "Failed to validate JSON" error: the 20b fallback was
+    #     being called at the same "high" effort as the primary.
+    #   * reasoning_format="parsed" (added in round 8) changed nothing measurable
+    #     on 120b, and Groq's docs say the parameter is NOT supported for gpt-oss
+    #     models (they use include_reasoning). It is no longer sent.
+    # So: send only reasoning_effort, and cap it at "medium" for any 20b model.
+    def _reasoning_kwargs(model_id: str) -> dict:
+        if tier != "reasoning":
+            return {}
+        effort = reasoning_effort
+        if re.search(r"(?<!\d)20b", model_id) and effort == "high":  # not "120b"!
+            effort = "medium"
+        return {"reasoning_effort": effort}
 
     runnables = [
-        ChatGroq(model=model_id, temperature=temperature, api_key=api_key, **extra_kwargs)
-        .with_structured_output(schema, method="json_schema", strict=True)
-        .with_retry(stop_after_attempt=2, wait_exponential_jitter=True)
+        _with_rate_limit_patience(
+            # max_retries=0: the Groq SDK's own hidden retry sleeps for the
+            # server's retry-after (10-25 s in the benchmark) *before* our
+            # fallback chain ever sees the error. We own retry policy below.
+            ChatGroq(model=model_id, temperature=temperature, api_key=api_key,
+                     max_retries=0, **_reasoning_kwargs(model_id))
+            .with_structured_output(schema, method="json_schema", strict=True)
+            # Retry only transient failures. 400 (schema/JSON problems) and 429
+            # are deterministic for the same request — retrying them just burns time.
+            .with_retry(
+                retry_if_exception_type=TRANSIENT_ERRORS,
+                stop_after_attempt=2,
+                wait_exponential_jitter=True,
+            ),
+            patience,
+        )
         for model_id in model_chain
     ]
 
     primary, *fallbacks = runnables
     return primary.with_fallbacks(fallbacks) if fallbacks else primary
+
+
+TRANSIENT_ERRORS = (groq.APIConnectionError, groq.APITimeoutError, groq.InternalServerError)
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Seconds Groq asks us to wait (retry-after header), if present."""
+    try:
+        value = exc.response.headers.get("retry-after")  # type: ignore[attr-defined]
+        return float(value) if value is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _with_rate_limit_patience(inner: Runnable, max_wait: float) -> Runnable:
+    """On a 429, sleep for retry-after and retry once — but only if the wait
+    is within max_wait. max_wait=0 means "never wait": raise immediately so
+    the fallback chain can move to the other model (a separate rate bucket)."""
+    if max_wait <= 0:
+        return inner
+
+    def _call(value: Any, config=None):
+        try:
+            return inner.invoke(value, config)
+        except groq.RateLimitError as exc:
+            wait = _retry_after_seconds(exc)
+            if wait is None or wait > max_wait:
+                raise
+            time.sleep(wait + 0.5)
+            return inner.invoke(value, config)
+
+    return RunnableLambda(_call)

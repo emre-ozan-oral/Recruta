@@ -2,7 +2,7 @@
 weighted, per-requirement score — not just the single eyeballed match_score
 CV Matcher derives as a byproduct of listing matched/missing skills.
 
-Runs after cv_matcher, using tier="reasoning" (Groq's reasoning_effort="high"
+Runs after cv_matcher, using tier="reasoning" (Groq's reasoning_effort, default "medium"
 on the same gpt-oss models — deeper chain-of-thought before answering, see
 llm.py for why this is "another reasoning model" rather than a different
 model family). Every hard requirement gets an explicit weight (how much it
@@ -135,3 +135,31 @@ def run(state: AgentState) -> dict:
         "score_breakdown": score_breakdown,
         "messages": [*state.get("messages", []), log_line],
     }
+
+
+def run_independent(state: AgentState) -> dict:
+    """Scoring pass that does NOT read cv_matcher's output (the prompt already
+    tells the model to re-derive every verdict from the CV, using the match
+    analysis "for context only"). Dropping that input lets graph_fast.py run
+    the scorer concurrently with cv_matcher. Returns ONLY score_breakdown —
+    the caller merges the score into match_analysis afterwards — and returns
+    None for it on failure so the caller can apply the fallback.
+    """
+    llm = get_structured_llm(ScoringResult, tier="reasoning", temperature=0)
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", SYSTEM_PROMPT), ("human", USER_PROMPT)]
+    )
+    hard_requirements = {
+        k: v for k, v in state["job_requirements"].items() if k != "soft_skills"
+    }
+    try:
+        result: ScoringResult = (prompt | llm).invoke(
+            {
+                "job_requirements": json.dumps(hard_requirements, ensure_ascii=False),
+                "match_analysis": "(not provided — derive every verdict from the CV alone)",
+                "cv_text": state["cv_text"],
+            }
+        )
+        return {"score_breakdown": result.model_dump()}
+    except Exception as exc:  # noqa: BLE001 — caller applies _fallback_score_breakdown
+        return {"score_breakdown": None, "errors": {"scorer": f"{type(exc).__name__}: {exc}"}}
